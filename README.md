@@ -62,7 +62,7 @@ python scripts/lit_review.py seeds.txt --to-zotero --zotero-collection "proactiv
 | `--source` | auto | `auto` / `semanticscholar` / `openalex`（解析源；关联文献始终走 Semantic Scholar） |
 | `--out DIR` | lit-review-output | 输出目录 |
 | `--to-zotero` | 关 | 把结果直接写入 Zotero 库（需 pyzotero + 两个 ZOTERO 环境变量） |
-| `--zotero-collection` | 无 | 写入的分类，如 `proactive agent/more`，不存在会自动建 |
+| `--zotero-collection` | 无 | 分类路径，如 `proactive agent/more`；带 `/` 时种子进父分类、关联文献进子分类，不存在会自动建 |
 | `--zotero-library-type` | user | `user` 或 `group` |
 
 ## 输出

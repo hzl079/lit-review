@@ -62,7 +62,7 @@ python scripts/lit_review.py seeds.txt \
 - `--per-seed`：额外为每篇种子各生成一个 `.bib`（`01-标题.bib`）。
 - `--source auto|semanticscholar|openalex`：解析数据源，默认 `auto`（S2 失败时降级 OpenAlex 解析；但关联文献始终走 S2）。
 - `--to-zotero`：把结果直接写入 Zotero 库（替代手动拖文件）。
-- `--zotero-collection "proactive agent/more"`：写入的分类，不存在会自动创建（支持 `/` 嵌套）。
+- `--zotero-collection "proactive agent/more"`：分类路径，不存在会自动创建（支持 `/` 嵌套）。**带 `/` 时：种子论文进父分类 `proactive agent`，关联文献进子分类 `more`**；不带 `/` 时两者进同一个分类。
 - `--zotero-library-type user|group`：库类型，默认 `user`。
 
 输出：

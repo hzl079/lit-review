@@ -98,6 +98,24 @@ _ARXIV_RE = re.compile(r"(?:arxiv\.org/(?:abs|pdf)/)?(\d{4}\.\d{4,5})(?:v\d+)?",
 _DOI_RE = re.compile(r"\b(10\.\d{4,9}/[-._;()/:a-zA-Z0-9]+)\b")
 
 
+def _normalize_s2_authors(paper: dict) -> dict:
+    """把 Semantic Scholar 的 authors（[{authorId,name}]）规整成字符串列表。
+
+    S2 返回的作者是对象列表，而下游 BibTeX / Zotero 生成都假定是
+    "First Last" 字符串列表；不规整会导致作者字段输出成垃圾。
+    """
+    out = []
+    for a in (paper.get("authors") or []):
+        if isinstance(a, dict):
+            n = a.get("name") or ""
+        else:
+            n = str(a)
+        if n:
+            out.append(n)
+    paper["authors"] = out
+    return paper
+
+
 def resolve_seed(query: str) -> dict | None:
     """把一条 seed（标题 / DOI / arXiv ID / URL）解析成 Semantic Scholar 论文对象。"""
     q = query.strip()
@@ -107,26 +125,26 @@ def resolve_seed(query: str) -> dict | None:
     if m:
         paper = s2_get(f"/paper/arXiv:{m.group(1)}", {"fields": S2_FIELDS})
         if paper.get("paperId"):
-            return paper
+            return _normalize_s2_authors(paper)
     m = _DOI_RE.search(q)
     if m:
         paper = s2_get(f"/paper/DOI:{urllib.parse.quote(m.group(1))}",
                        {"fields": S2_FIELDS})
         if paper.get("paperId"):
-            return paper
+            return _normalize_s2_authors(paper)
     paper = s2_get("/paper/search/match", {"query": q, "fields": S2_FIELDS})
     if paper.get("paperId"):
-        return paper
+        return _normalize_s2_authors(paper)
     results = s2_get("/paper/search",
                      {"query": q, "fields": S2_FIELDS, "limit": 1})
     data = results.get("data") or []
-    return data[0] if data else None
+    return _normalize_s2_authors(data[0]) if data else None
 
 
 def get_related(paper_id: str, limit: int = 50) -> list[dict]:
     r = s2_get(f"/paper/{paper_id}/recommendations",
                {"fields": S2_FIELDS, "limit": limit})
-    return r.get("data") or []
+    return [_normalize_s2_authors(p) for p in (r.get("data") or [])]
 
 
 # ---------------------------------------------------------------------------
@@ -423,13 +441,10 @@ def _ensure_collection(zot, path: str):
     return parent_key
 
 
-def import_to_zotero(entries, collection_path, api_key, library_id, library_type) -> int:
-    try:
-        from pyzotero import zotero as pz
-    except ImportError:
-        print("  需要 pyzotero 库：pip install pyzotero")
+def _create_items_in_collection(zot, entries, collection_path) -> int:
+    """创建条目并归入指定分类，返回成功条数。"""
+    if not entries:
         return 0
-    zot = pz.Zotero(library_id, library_type, api_key)
     templates = [entry_to_zotero_item(e) for e in entries]
     resp = zot.create_items(templates)
     created = []
@@ -443,7 +458,7 @@ def import_to_zotero(entries, collection_path, api_key, library_id, library_type
         failed = resp.get("failed", {}) if isinstance(resp, dict) else {}
         print(f"  写入失败：{len(failed)} 条")
         return 0
-    print(f"  已创建条目 {len(created)} 条")
+    n = len(created)
     if collection_path:
         col_key = _ensure_collection(zot, collection_path)
         if col_key:
@@ -457,8 +472,39 @@ def import_to_zotero(entries, collection_path, api_key, library_id, library_type
                     ok += 1
                 except Exception:
                     pass
-            print(f"  已加入分类 '{collection_path}'：{ok} 条")
-    return len(created)
+            print(f"  → 分类 '{collection_path}'：{ok} 条")
+    return n
+
+
+def import_to_zotero(seeds, connected, collection_path, api_key, library_id, library_type) -> int:
+    """把种子论文与关联文献分别写库。
+
+    约定：collection_path 形如 'proactive agent/more' 时，
+    种子论文 → 父分类 'proactive agent'，关联文献 → 子分类 'more'（与种子平级的下级）。
+    不带斜杠时两者进同一个分类。
+    """
+    try:
+        from pyzotero import zotero as pz
+    except ImportError:
+        print("  需要 pyzotero 库：pip install pyzotero")
+        return 0
+    zot = pz.Zotero(library_id, library_type, api_key)
+
+    parts = [p.strip() for p in (collection_path or "").split("/") if p.strip()]
+    if len(parts) > 1:
+        seed_col = "/".join(parts[:-1])   # 父分类
+        conn_col = collection_path          # 叶子子分类
+    else:
+        seed_col = conn_col = collection_path
+
+    total = 0
+    if seeds:
+        print(f"  导入种子论文 {len(seeds)} 条 ...")
+        total += _create_items_in_collection(zot, seeds, seed_col)
+    if connected:
+        print(f"  导入关联文献 {len(connected)} 条 ...")
+        total += _create_items_in_collection(zot, connected, conn_col)
+    return total
 
 
 # ---------------------------------------------------------------------------
@@ -588,7 +634,7 @@ def main() -> int:
             print("  export ZOTERO_LIBRARY_ID=你的userID   (申请: https://www.zotero.org/settings/keys)")
         else:
             print("\n写入 Zotero 库...")
-            import_to_zotero(unique, args.zotero_collection,
+            import_to_zotero(seed_meta, unique, args.zotero_collection,
                              api_key, library_id, args.zotero_library_type)
 
     if args.per_seed:
