@@ -33,7 +33,7 @@ import urllib.request
 S2_BASE = "https://api.semanticscholar.org/graph/v1"
 OPENALEX_BASE = "https://api.openalex.org"
 USER_AGENT = "lit-review-skill/1.0 (mailto:you@example.com)"
-S2_FIELDS = "paperId,title,year,authors,externalIds,venue"
+S2_FIELDS = "paperId,title,year,authors,externalIds,venue,abstract"
 
 _rate_limited = {"hit": False}
 
@@ -307,6 +307,161 @@ def entry_to_bibtex(entry: dict, used: set[str]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# 写入 Zotero（可选，依赖 pyzotero）
+# ---------------------------------------------------------------------------
+
+def _split_author(name: str) -> tuple[str, str]:
+    name = (name or "").strip()
+    if not name:
+        return "", ""
+    parts = name.rsplit(" ", 1)
+    return (parts[0], parts[1]) if len(parts) == 2 else ("", parts[0])
+
+
+def entry_to_zotero_item(entry: dict) -> dict:
+    """把内部条目转成 Zotero Web API 的 item 模板。"""
+    ext = entry.get("externalIds") or {}
+    arxiv_id = ext.get("ArXiv")
+    doi = ext.get("DOI") or entry.get("doi")
+    if doi and doi.lower().startswith("10.48550"):
+        doi = None
+    is_arxiv_only = bool(arxiv_id) and not doi
+    venue = entry.get("venue") or ""
+    etype = entry.get("type") or ""
+    is_conf = etype == "proceedings-article" or re.search(
+        r"conference|symposium|proceedings|workshop|AAAI|ACL|EMNLP|NeurIPS|ICLR|ICML|CHI",
+        venue, re.I)
+
+    creators = []
+    for a in (entry.get("authors") or []):
+        fn, ln = _split_author(a)
+        if ln:
+            creators.append({"creatorType": "author", "firstName": fn, "lastName": ln})
+
+    if is_arxiv_only:
+        item = {"itemType": "preprint", "repository": "arXiv"}
+        if arxiv_id:
+            item["archiveID"] = arxiv_id
+            item["extra"] = "arXiv: " + arxiv_id
+    elif is_conf:
+        item = {"itemType": "conferencePaper"}
+        if venue:
+            item["conferenceName"] = venue
+    else:
+        item = {"itemType": "journalArticle"}
+        if venue:
+            item["publicationTitle"] = venue
+
+    item["title"] = entry.get("title") or "(no title)"
+    if creators:
+        item["creators"] = creators
+    if entry.get("abstract"):
+        item["abstractNote"] = entry["abstract"]
+    year = re.sub(r"[^0-9]", "", str(entry.get("year") or ""))[:4]
+    if year:
+        item["date"] = year
+    if doi:
+        item["DOI"] = doi
+    if entry.get("volume"):
+        item["volume"] = entry["volume"]
+    if entry.get("page"):
+        item["pages"] = entry["page"]
+    # url：优先 arXiv / DOI
+    if arxiv_id:
+        item["url"] = f"https://arxiv.org/abs/{arxiv_id}"
+    elif doi:
+        item["url"] = f"https://doi.org/{doi}"
+    return item
+
+
+def _collection_field(c: dict, field: str):
+    if not isinstance(c, dict):
+        return None
+    if field in c:
+        return c[field]
+    d = c.get("data")
+    if isinstance(d, dict):
+        return d.get(field)
+    return None
+
+
+def _ensure_collection(zot, path: str):
+    parts = [p.strip() for p in (path or "").split("/") if p.strip()]
+    if not parts:
+        return None
+    try:
+        cols = zot.collections()
+    except Exception:
+        cols = []
+    parent_key = False  # False == 顶层
+    for name in parts:
+        found = None
+        for c in cols:
+            if (_collection_field(c, "name") == name
+                    and _collection_field(c, "parentCollection") in (parent_key, None, False)):
+                found = c.get("key") if isinstance(c, dict) else None
+                break
+        if not found:
+            data = [{"name": name}]
+            if parent_key:
+                data[0]["parentCollection"] = parent_key
+            resp = zot.create_collections(data)
+            created = {}
+            if isinstance(resp, dict):
+                for bucket in ("successful", "success"):
+                    if resp.get(bucket):
+                        created.update(resp[bucket])
+            vals = list(created.values())
+            if vals and isinstance(vals[0], dict):
+                found = vals[0].get("key")
+            else:
+                found = list(created.keys())[0] if created else None
+        if not found:
+            print(f"  创建分类 '{name}' 失败")
+            return None
+        parent_key = found
+    return parent_key
+
+
+def import_to_zotero(entries, collection_path, api_key, library_id, library_type) -> int:
+    try:
+        from pyzotero import zotero as pz
+    except ImportError:
+        print("  需要 pyzotero 库：pip install pyzotero")
+        return 0
+    zot = pz.Zotero(library_id, library_type, api_key)
+    templates = [entry_to_zotero_item(e) for e in entries]
+    resp = zot.create_items(templates)
+    created = []
+    if isinstance(resp, dict):
+        for bucket in ("successful", "success"):
+            if resp.get(bucket):
+                created += list(resp[bucket].values())
+    elif isinstance(resp, list):
+        created = resp
+    if not created:
+        failed = resp.get("failed", {}) if isinstance(resp, dict) else {}
+        print(f"  写入失败：{len(failed)} 条")
+        return 0
+    print(f"  已创建条目 {len(created)} 条")
+    if collection_path:
+        col_key = _ensure_collection(zot, collection_path)
+        if col_key:
+            ok = 0
+            for it in created:
+                key = it.get("key") if isinstance(it, dict) else None
+                if not key:
+                    continue
+                try:
+                    zot.addto_collection(col_key, key)
+                    ok += 1
+                except Exception:
+                    pass
+            print(f"  已加入分类 '{collection_path}'：{ok} 条")
+    return len(created)
+
+
+# ---------------------------------------------------------------------------
 # 去重
 # ---------------------------------------------------------------------------
 
@@ -356,6 +511,12 @@ def main() -> int:
     ap.add_argument("--source", default="auto",
                     choices=["auto", "semanticscholar", "openalex"],
                     help="数据源：semanticscholar（推荐，需 S2_API_KEY）/ openalex（免 key）/ auto（自动降级）")
+    ap.add_argument("--to-zotero", action="store_true",
+                    help="把结果写入 Zotero 库（需 ZOTERO_API_KEY 与 ZOTERO_LIBRARY_ID 环境变量，需 pip install pyzotero）")
+    ap.add_argument("--zotero-collection", default=None,
+                    help="写入的分类，如 'proactive agent/more'（不存在会自动创建）")
+    ap.add_argument("--zotero-library-type", default="user",
+                    help="Zotero 库类型：user 或 group")
     args = ap.parse_args()
 
     with open(args.seeds, encoding="utf-8") as f:
@@ -417,6 +578,18 @@ def main() -> int:
     all_bib = "\n\n".join(entry_to_bibtex(e, used_keys) for e in unique) + "\n"
     with open(os.path.join(args.out, "all.bib"), "w", encoding="utf-8") as f:
         f.write(all_bib)
+
+    if args.to_zotero:
+        api_key = os.environ.get("ZOTERO_API_KEY")
+        library_id = os.environ.get("ZOTERO_LIBRARY_ID")
+        if not api_key or not library_id:
+            print("\n⚠ --to-zotero 需要环境变量：")
+            print("  export ZOTERO_API_KEY=你的key")
+            print("  export ZOTERO_LIBRARY_ID=你的userID   (申请: https://www.zotero.org/settings/keys)")
+        else:
+            print("\n写入 Zotero 库...")
+            import_to_zotero(unique, args.zotero_collection,
+                             api_key, library_id, args.zotero_library_type)
 
     if args.per_seed:
         for si, paper in enumerate(seed_meta):

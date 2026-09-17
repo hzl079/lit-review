@@ -8,6 +8,7 @@
 - **元数据补全**：用 OpenAlex 按 DOI 补全作者全名、期刊/会议、卷期页。
 - **去重**：按 DOI → arXiv ID → 归一化标题去重。
 - **输出 BibTeX**：标准 `.bib`，交给 Zotero 原生导入（拖进窗口即可），arXiv 预印本自动输出为 `@misc` + `eprint`。
+- **直接写入 Zotero**（可选）：`--to-zotero` 用 Zotero Web API 把结果直接写进库、自动建分类，免手动拖文件。
 
 ## 为什么不用 Connected Papers 网页 + 手动导入
 
@@ -20,8 +21,9 @@
 
 ## 依赖
 
-- Python 3（**仅标准库**，无第三方依赖）
+- Python 3（**核心功能仅标准库**，无第三方依赖）
 - 一个**免费的 Semantic Scholar API key**（强烈建议，否则容易限速 429）
+- 可选：`pyzotero`（仅 `--to-zotero` 直接写库时需要）
 
 申请：<https://www.semanticscholar.org/product/api#api-key-form>
 
@@ -39,10 +41,15 @@ cat > seeds.txt <<'EOF'
 Attention Is All You Need
 EOF
 
-# 2. 运行
+# 2. 运行，产出 BibTeX
 python scripts/lit_review.py seeds.txt --related-limit 50 --enrich --per-seed --out output/
 
-# 3. 导入 Zotero：把 output/all.bib 拖进 Zotero 窗口（先选中目标分类）
+# 3a. 手动导入 Zotero：把 output/all.bib 拖进 Zotero 窗口（先选中目标分类）
+
+# 3b. 或一键直接写库（需 pip install pyzotero + 设置下面两个环境变量）
+export ZOTERO_API_KEY=你的key
+export ZOTERO_LIBRARY_ID=你的userID   # 都在 https://www.zotero.org/settings/keys 查
+python scripts/lit_review.py seeds.txt --to-zotero --zotero-collection "proactive agent/more"
 ```
 
 ## 参数
@@ -54,6 +61,9 @@ python scripts/lit_review.py seeds.txt --related-limit 50 --enrich --per-seed --
 | `--per-seed` | 关 | 额外按种子各生成一个 `.bib` |
 | `--source` | auto | `auto` / `semanticscholar` / `openalex`（解析源；关联文献始终走 Semantic Scholar） |
 | `--out DIR` | lit-review-output | 输出目录 |
+| `--to-zotero` | 关 | 把结果直接写入 Zotero 库（需 pyzotero + 两个 ZOTERO 环境变量） |
+| `--zotero-collection` | 无 | 写入的分类，如 `proactive agent/more`，不存在会自动建 |
+| `--zotero-library-type` | user | `user` 或 `group` |
 
 ## 输出
 
@@ -66,6 +76,10 @@ output/
 ```
 
 ## 导入 Zotero
+
+**方式 A（一键写库）**：`--to-zotero --zotero-collection "proactive agent/more"`，脚本直接把条目写进 Zotero 指定分类（分类不存在会自动建）。
+
+**方式 B（手动拖）**：
 
 1. 左侧建分类（一次性）：主题分类 → 右键新建子分类。
 2. **选中**目标分类。

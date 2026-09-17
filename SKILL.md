@@ -16,7 +16,7 @@ description: 文献调研"滚雪球"工作流：从一组种子论文（标题/D
 
 ## 前置条件
 
-1. Python 3（仅标准库，无第三方依赖）。
+1. Python 3（核心功能仅标准库，无第三方依赖）。
 2. **强烈建议申请免费的 Semantic Scholar API key**（无 key 时限速很严，容易 429）：
 
    ```bash
@@ -26,6 +26,16 @@ description: 文献调研"滚雪球"工作流：从一组种子论文（标题/D
    申请地址：<https://www.semanticscholar.org/product/api#api-key-form>（30 秒、免费）。
 
    ⚠ 关联文献只能靠 Semantic Scholar（OpenAlex 对新论文的关联/引用图几乎是空的），所以这一步的 key 基本是必需的。
+
+3. **可选：直接写入 Zotero**（`--to-zotero`）需要额外两样：
+
+   ```bash
+   pip install pyzotero
+   export ZOTERO_API_KEY=你的key
+   export ZOTERO_LIBRARY_ID=你的userID
+   ```
+
+   API key 和 userID 都在 <https://www.zotero.org/settings/keys> 里查（走 Zotero 官方 Web API，操作你的云端同步库）。
 
 ## 工作流
 
@@ -51,6 +61,9 @@ python scripts/lit_review.py seeds.txt \
 - `--enrich`：用 OpenAlex 按 DOI 补全作者全名/期刊/卷期页（推荐）。
 - `--per-seed`：额外为每篇种子各生成一个 `.bib`（`01-标题.bib`）。
 - `--source auto|semanticscholar|openalex`：解析数据源，默认 `auto`（S2 失败时降级 OpenAlex 解析；但关联文献始终走 S2）。
+- `--to-zotero`：把结果直接写入 Zotero 库（替代手动拖文件）。
+- `--zotero-collection "proactive agent/more"`：写入的分类，不存在会自动创建（支持 `/` 嵌套）。
+- `--zotero-library-type user|group`：库类型，默认 `user`。
 
 输出：
 
@@ -58,11 +71,19 @@ python scripts/lit_review.py seeds.txt \
 - `seeds.json` / `related.json`：原始元数据。
 - `NN-标题.bib`：`--per-seed` 时按种子分文件。
 
-### 第 3 步：导入 Zotero（原生 BibTeX）
+### 第 3 步：导入 Zotero（二选一）
 
-1. 在 Zotero 左侧建分类（一次性）：顶层建一个主题分类（如 `proactive agent`），再右键它建子分类（如 `more`）。
+**方式 A（推荐，一键）**：加 `--to-zotero`，脚本直接写进 Zotero 指定分类，无需手动操作。
+
+```bash
+python scripts/lit_review.py seeds.txt --to-zotero --zotero-collection "proactive agent/more"
+```
+
+**方式 B（手动拖）**：不加 `--to-zotero`，脚本只产出 `.bib`，然后：
+
+1. 在 Zotero 左侧建分类（一次性）：顶层建主题分类，右键它建子分类。
 2. **选中目标分类**。
-3. 把 `all.bib`（或分文件）**拖进 Zotero 窗口**，或 `文件 → 导入`。Zotero 会自动按 BibTeX 解析，条目落入当前选中的分类。
+3. 把 `all.bib` 拖进 Zotero 窗口，或 `文件 → 导入`。
 
 ### 第 4 步：去重与整理
 
@@ -74,6 +95,8 @@ python scripts/lit_review.py seeds.txt \
 - **一直报 429 / 关联文献抓不到**：没设 `S2_API_KEY`。设置后重试。
 - **`--source openalex` 解析正常但关联文献为 0**：OpenAlex 对 2024+ 新论文的关联图稀疏，这是预期行为；关联文献请走 Semantic Scholar。
 - **BibTeX 里 arXiv 预印本是 `@misc` + `eprint`**：这是对的，Zotero 会把它映射成 preprint 类型。
+- **`--to-zotero` 报 `No module named 'pyzotero'`**：先 `pip install pyzotero`。
+- **`--to-zotero` 报 403 / 401**：`ZOTERO_API_KEY` 或 `ZOTERO_LIBRARY_ID` 不对，去 <https://www.zotero.org/settings/keys> 核对。
 
 ## 脚本位置
 
